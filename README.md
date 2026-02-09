@@ -1,6 +1,6 @@
 # Bazel watcher
 
-[![Build status](https://badge.buildkite.com/7694a2e22dcb7ea2e2ec80bb7e8e0380c700079e761394096f.svg?branch=master)](https://buildkite.com/bazel/bazel-watcher-postsubmit)
+[![Build status](https://badge.buildkite.com/7694a2e22dcb7ea2e2ec80bb7e8e0380c700079e761394096f.svg?branch=main)](https://buildkite.com/bazel/bazel-watcher-postsubmit)
 
 Note: This is not an official Google product.
 
@@ -183,7 +183,7 @@ The profile outfile is in concatenated JSON format. Events are outputted one per
 
 ### Example profile output file
 
-You can find an example profile output JSON file [here](https://github.com/bazelbuild/bazel-watcher/blob/master/example.profile.json). Below is the file in pretty print JSON format:
+You can find an example profile output JSON file [here](https://github.com/bazelbuild/bazel-watcher/blob/main/example.profile.json). Below is the file in pretty print JSON format:
 
 ```
 {

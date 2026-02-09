@@ -66,7 +66,7 @@ git tag "${GIT_TAG}"
 # Success! Publish the tag to GitHub
 git push git@github.com:bazelbuild/bazel-watcher "${GIT_TAG}"
 
-# Advance master branch to the tag.
-git push git@github.com:bazelbuild/bazel-watcher "${GIT_TAG}:master"
+# Advance main branch to the tag.
+git push git@github.com:bazelbuild/bazel-watcher "${GIT_TAG}:main"
 
 echo ""

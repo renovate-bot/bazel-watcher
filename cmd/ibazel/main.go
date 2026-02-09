@@ -117,7 +117,7 @@ Supported Bazel command flags:
   %s
 
 To add to this list, edit
-https://github.com/bazelbuild/bazel-watcher/blob/master/ibazel/main.go
+https://github.com/bazelbuild/bazel-watcher/blob/main/ibazel/main.go
 
 iBazel flags:
 `, Version, strings.Join(overrideableStartupFlags, "\n  "), strings.Join(overrideableBazelFlags, "\n  "))
