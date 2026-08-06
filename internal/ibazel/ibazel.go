@@ -200,18 +200,9 @@ func (i *IBazel) Cleanup() {
 
 func (i *IBazel) targetDecider(target string, rule *blaze_query.Rule) {
 	for _, l := range i.lifecycleListeners {
-		// TODO: As the name implies, it would be good to use this to make a
-		// determination about if future events should be routed to this listener.
-		// Why not do it now?
-		// Right now I don't track which file is associated with the end target. I
-		// just query for a list of all files that are rdeps of any target that is
-		// in the list of targets to build/test/run (although run can only have 1).
-		// Since I don't have that mapping right now the information doesn't
-		// presently exist to implement this properly. Additionally, since querying
-		// is currently in the critical path for getting something the user cares
-		// about on screen, I'm not sure that it is wise to do this in the first
-		// pass. It might be worth triggering the user action, launching their thing
-		// and then running a background thread to access the data.
+		// TODO: Use a target-to-file mapping to decide which listeners receive
+		// future events. Watch queries currently return the union of files for all
+		// requested targets and discard that ownership information.
 		l.TargetDecider(rule)
 	}
 }
