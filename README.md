@@ -76,6 +76,10 @@ versioned JSON event after each incremental build containing the filesystem
 changes that triggered it. Keep both tags so older iBazel versions still use
 notification mode. Targets without the new tag retain the legacy protocol.
 
+Notification-mode targets start before iBazel discovers their watch graph.
+iBazel installs the watchers afterward and sends a catch-up build, keeping a
+large watch query off the application's startup path without missing changes.
+
 ```text
 IBAZEL_BUILD_COMPLETED SUCCESS
 IBAZEL_EVENT {"version":1,"type":"build_completed","success":true,"changes":[{"path":"/workspace/src/app.ts","kind":"source"}]}

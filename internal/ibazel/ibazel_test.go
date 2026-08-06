@@ -440,6 +440,7 @@ func TestIBazelRun_notifyPreexistiingJobWhenStarting(t *testing.T) {
 		notifiedOfChanges: false,
 	}
 	i.cmd = cmd
+	i.runCommandStarted = true
 	i.pendingChanges = []command.Change{{Path: "/workspace/path/to/file", Kind: "source"}}
 
 	path := "//path/to:target"
@@ -451,17 +452,81 @@ func TestIBazelRun_notifyPreexistiingJobWhenStarting(t *testing.T) {
 	assertEqual(t, i.pendingChanges, cmd.changes, "Changes passed to running command")
 }
 
-func TestSetupRunNegotiatesStructuredNotifications(t *testing.T) {
+func TestIBazelRunStartsBeforeWatchQuery(t *testing.T) {
+	log.SetTesting(t)
+
+	oldCommandNotifyCommand := commandNotifyCommand
+	defer func() { commandNotifyCommand = oldCommandNotifyCommand }()
+
+	i, mockBazel := newIBazel(t)
+	defer i.Cleanup()
+
+	target := "//path/to:target"
+	attributeType := blaze_query.Attribute_STRING_LIST
+	mockBazel.AddCQueryResponse(target, &analysispb.CqueryResult{
+		Results: []*analysispb.ConfiguredTarget{{
+			Target: &blaze_query.Target{
+				Type: blaze_query.Target_RULE.Enum(),
+				Rule: &blaze_query.Rule{
+					Name: proto.String(target),
+					Attribute: []*blaze_query.Attribute{{
+						Name:            proto.String("tags"),
+						Type:            &attributeType,
+						StringListValue: []string{"ibazel_notify_changes"},
+					}},
+				},
+			},
+		}},
+	})
+	mockBazel.AddCQueryResponse(fmt.Sprintf("deps(set(%s))", target), &analysispb.CqueryResult{})
+	mockBazel.AddQueryResponse("buildfiles(set())", &blaze_query.QueryResult{})
+	mockBazel.AddCQueryResponse(fmt.Sprintf("kind('source file', deps(set(%s)))", target), &analysispb.CqueryResult{})
+
+	outputBase := t.TempDir()
+	if err := os.Mkdir(filepath.Join(outputBase, "external"), 0o700); err != nil {
+		t.Fatalf("failed to create external directory: %v", err)
+	}
+	mockBazel.SetInfo(map[string]string{
+		"output_base":  outputBase,
+		"install_base": t.TempDir(),
+	})
+
+	cmd := &mockCommand{}
+	commandNotifyCommand = func(_ []string, _ []string, _ string, _ []string, _ bool) command.Command {
+		return cmd
+	}
+
+	i.state = i.prepareRun(target)
+	i.iteration("run", i.run, []string{target}, target)
+	if !cmd.started {
+		t.Fatal("run target was not started")
+	}
+	assertEqual(t, QUERY, i.state, "Watch query should run after the target starts")
+
+	i.iteration("run", i.run, []string{target}, target)
+	assertEqual(t, RUN, i.state, "Catch-up build should follow the watch query")
+
+	i.iteration("run", i.run, []string{target}, target)
+	if !cmd.notifiedOfChanges {
+		t.Fatal("run target did not receive the catch-up build")
+	}
+	assertEqual(t, []command.Change{{Kind: "graph"}}, cmd.changes, "Catch-up build changes")
+	assertEqual(t, WAIT, i.state, "Run should wait after the catch-up build")
+}
+
+func TestPrepareRunNegotiatesNotificationsAndInitialState(t *testing.T) {
 	oldCommandNotifyCommand := commandNotifyCommand
 	defer func() { commandNotifyCommand = oldCommandNotifyCommand }()
 
 	for _, test := range []struct {
-		name       string
-		tags       []string
-		structured bool
+		name         string
+		tags         []string
+		structured   bool
+		initialState State
 	}{
-		{name: "legacy", tags: []string{"ibazel_notify_changes"}},
-		{name: "structured", tags: []string{"ibazel_notify_changes", "ibazel_notify_changes_v1"}, structured: true},
+		{name: "default", initialState: QUERY},
+		{name: "legacy", tags: []string{"ibazel_notify_changes"}, initialState: RUN},
+		{name: "structured", tags: []string{"ibazel_notify_changes", "ibazel_notify_changes_v1"}, structured: true, initialState: RUN},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			i, mockBazel := newIBazel(t)
@@ -491,8 +556,9 @@ func TestSetupRunNegotiatesStructuredNotifications(t *testing.T) {
 				return &mockCommand{}
 			}
 
-			i.setupRun(target)
+			initialState := i.prepareRun(target)
 			assertEqual(t, test.structured, structured, "Structured notification mode")
+			assertEqual(t, test.initialState, initialState, "Initial run state")
 		})
 	}
 }

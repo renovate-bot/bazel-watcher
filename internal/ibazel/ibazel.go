@@ -84,6 +84,9 @@ type IBazel struct {
 
 	lifecycleListeners []Lifecycle
 	pendingChanges     []command.Change
+	runCommandNotifies bool
+	runCommandStarted  bool
+	queryAfterRun      bool
 
 	state State
 }
@@ -263,28 +266,28 @@ func (i *IBazel) setup() error {
 // Run the specified target (singular) in the IBazel loop.
 func (i *IBazel) Run(target string, args []string) error {
 	i.args = args
-	return i.loop("run", i.run, []string{target})
+	return i.loop("run", i.run, []string{target}, i.prepareRun(target))
 }
 
 // Build the specified targets in the IBazel loop.
 func (i *IBazel) Build(targets ...string) error {
-	return i.loop("build", i.build, targets)
+	return i.loop("build", i.build, targets, QUERY)
 }
 
 // Test the specified targets in the IBazel loop.
 func (i *IBazel) Test(targets ...string) error {
-	return i.loop("test", i.test, targets)
+	return i.loop("test", i.test, targets, QUERY)
 }
 
 // Get code coverage for the specified targets in the IBazel loop.
 func (i *IBazel) Coverage(targets ...string) error {
-	return i.loop("coverage", i.test, targets)
+	return i.loop("coverage", i.test, targets, QUERY)
 }
 
-func (i *IBazel) loop(command string, commandToRun runnableCommand, targets []string) error {
+func (i *IBazel) loop(command string, commandToRun runnableCommand, targets []string, initialState State) error {
 	joinedTargets := strings.Join(targets, " ")
 
-	i.state = QUERY
+	i.state = initialState
 	for {
 		i.iteration(command, commandToRun, targets, joinedTargets)
 	}
@@ -294,7 +297,7 @@ func (i *IBazel) loop(command string, commandToRun runnableCommand, targets []st
 // to avoid triggering builds on file accesses (e.g. due to your IDE checking modified status).
 const modifyingEvents = common.Write | common.Create | common.Rename | common.Remove
 
-func (i *IBazel) iteration(command string, commandToRun runnableCommand, targets []string, joinedTargets string) {
+func (i *IBazel) iteration(commandName string, commandToRun runnableCommand, targets []string, joinedTargets string) {
 	switch i.state {
 	case WAIT:
 		select {
@@ -351,12 +354,20 @@ func (i *IBazel) iteration(command string, commandToRun runnableCommand, targets
 			i.state = RUN
 		}
 	case RUN:
-		log.Logf("%s %s", strings.Title(verb(command)), joinedTargets)
-		i.beforeCommand(targets, command)
+		log.Logf("%s %s", strings.Title(verb(commandName)), joinedTargets)
+		i.beforeCommand(targets, commandName)
 		outputBuffer, err := commandToRun(targets...)
 		i.interruptCount = 0
-		i.afterCommand(targets, command, err == nil, outputBuffer)
+		i.afterCommand(targets, commandName, err == nil, outputBuffer)
 		i.pendingChanges = nil
+		if i.queryAfterRun {
+			// Notification-mode targets stay alive across builds, so start them before
+			// watch discovery. A full catch-up build closes the unwatched startup window.
+			i.queryAfterRun = false
+			i.pendingChanges = []command.Change{{Kind: "graph"}}
+			i.state = QUERY
+			return
+		}
 		i.state = WAIT
 	}
 }
@@ -453,19 +464,33 @@ func (i *IBazel) setupRun(target string) command.Command {
 	}
 
 	if commandNotify {
+		i.runCommandNotifies = true
 		log.Logf("Launching with notifications")
 		return commandNotifyCommand(i.startupArgs, i.bazelArgs, target, i.args, structuredNotify)
 	} else {
+		i.runCommandNotifies = false
 		return commandDefaultCommand(i.startupArgs, i.bazelArgs, target, i.args)
 	}
 }
 
+func (i *IBazel) prepareRun(target string) State {
+	i.cmd = i.setupRun(target)
+	i.runCommandStarted = false
+	i.queryAfterRun = i.runCommandNotifies
+	if i.runCommandNotifies {
+		return RUN
+	}
+	return QUERY
+}
+
 func (i *IBazel) run(targets ...string) (*bytes.Buffer, error) {
-	if i.cmd == nil {
-		// If the command is empty, we are in our first pass through the state
-		// machine and we need to make a command object.
-		i.cmd = i.setupRun(targets[0])
+	if !i.runCommandStarted {
+		// Direct callers may not have prepared the command through Run.
+		if i.cmd == nil {
+			i.cmd = i.setupRun(targets[0])
+		}
 		outputBuffer, err := i.cmd.Start()
+		i.runCommandStarted = err == nil
 		if err != nil {
 			log.Errorf("Run start failed %v", err)
 		}
