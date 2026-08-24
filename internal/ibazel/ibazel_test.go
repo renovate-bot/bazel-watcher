@@ -440,7 +440,6 @@ func TestIBazelRun_notifyPreexistiingJobWhenStarting(t *testing.T) {
 		notifiedOfChanges: false,
 	}
 	i.cmd = cmd
-	i.runCommandStarted = true
 	i.pendingChanges = []command.Change{{Path: "/workspace/path/to/file", Kind: "source"}}
 
 	path := "//path/to:target"
@@ -496,7 +495,7 @@ func TestIBazelRunStartsBeforeWatchQuery(t *testing.T) {
 		return cmd
 	}
 
-	i.state = i.prepareRun(target)
+	i.prepareRun(target)
 	i.iteration("run", i.run, []string{target}, target)
 	if !cmd.started {
 		t.Fatal("run target was not started")
@@ -556,9 +555,9 @@ func TestPrepareRunNegotiatesNotificationsAndInitialState(t *testing.T) {
 				return &mockCommand{}
 			}
 
-			initialState := i.prepareRun(target)
+			i.prepareRun(target)
 			assertEqual(t, test.structured, structured, "Structured notification mode")
-			assertEqual(t, test.initialState, initialState, "Initial run state")
+			assertEqual(t, test.initialState, i.state, "Initial run state")
 		})
 	}
 }

@@ -49,6 +49,7 @@ var exitMessages = map[os.Signal]string{
 }
 
 type State string
+type executionMode int
 type runnableCommand func(...string) (*bytes.Buffer, error)
 
 const (
@@ -58,6 +59,13 @@ const (
 	DEBOUNCE_RUN   State = "DEBOUNCE_RUN"
 	RUN            State = "RUN"
 	QUIT           State = "QUIT"
+)
+
+const (
+	defaultExecution executionMode = iota
+	defaultStartupExecution
+	notificationStartupExecution
+	notificationExecution
 )
 
 const sourceQuery = "kind('source file', deps(set(%s)))"
@@ -84,9 +92,7 @@ type IBazel struct {
 
 	lifecycleListeners []Lifecycle
 	pendingChanges     []command.Change
-	runCommandNotifies bool
-	runCommandStarted  bool
-	queryAfterRun      bool
+	executionMode      executionMode
 
 	state State
 }
@@ -257,28 +263,31 @@ func (i *IBazel) setup() error {
 // Run the specified target (singular) in the IBazel loop.
 func (i *IBazel) Run(target string, args []string) error {
 	i.args = args
-	return i.loop("run", i.run, []string{target}, i.prepareRun(target))
+	i.prepareRun(target)
+	return i.loop("run", i.run, []string{target})
 }
 
 // Build the specified targets in the IBazel loop.
 func (i *IBazel) Build(targets ...string) error {
-	return i.loop("build", i.build, targets, QUERY)
+	i.state = QUERY
+	return i.loop("build", i.build, targets)
 }
 
 // Test the specified targets in the IBazel loop.
 func (i *IBazel) Test(targets ...string) error {
-	return i.loop("test", i.test, targets, QUERY)
+	i.state = QUERY
+	return i.loop("test", i.test, targets)
 }
 
 // Get code coverage for the specified targets in the IBazel loop.
 func (i *IBazel) Coverage(targets ...string) error {
-	return i.loop("coverage", i.test, targets, QUERY)
+	i.state = QUERY
+	return i.loop("coverage", i.test, targets)
 }
 
-func (i *IBazel) loop(command string, commandToRun runnableCommand, targets []string, initialState State) error {
+func (i *IBazel) loop(command string, commandToRun runnableCommand, targets []string) error {
 	joinedTargets := strings.Join(targets, " ")
 
-	i.state = initialState
 	for {
 		i.iteration(command, commandToRun, targets, joinedTargets)
 	}
@@ -351,15 +360,16 @@ func (i *IBazel) iteration(commandName string, commandToRun runnableCommand, tar
 		i.interruptCount = 0
 		i.afterCommand(targets, commandName, err == nil, outputBuffer)
 		i.pendingChanges = nil
-		if i.queryAfterRun {
+		switch i.executionMode {
+		case notificationStartupExecution:
 			// Notification-mode targets stay alive across builds, so start them before
 			// watch discovery. A full catch-up build closes the unwatched startup window.
-			i.queryAfterRun = false
+			i.executionMode = notificationExecution
 			i.pendingChanges = []command.Change{{Kind: "graph"}}
 			i.state = QUERY
-			return
+		default:
+			i.state = WAIT
 		}
-		i.state = WAIT
 	}
 }
 
@@ -455,42 +465,44 @@ func (i *IBazel) setupRun(target string) command.Command {
 	}
 
 	if commandNotify {
-		i.runCommandNotifies = true
+		i.executionMode = notificationStartupExecution
 		log.Logf("Launching with notifications")
 		return commandNotifyCommand(i.startupArgs, i.bazelArgs, target, i.args, structuredNotify)
 	} else {
-		i.runCommandNotifies = false
+		i.executionMode = defaultStartupExecution
 		return commandDefaultCommand(i.startupArgs, i.bazelArgs, target, i.args)
 	}
 }
 
-func (i *IBazel) prepareRun(target string) State {
+func (i *IBazel) prepareRun(target string) {
 	i.cmd = i.setupRun(target)
-	i.runCommandStarted = false
-	i.queryAfterRun = i.runCommandNotifies
-	if i.runCommandNotifies {
-		return RUN
+	switch i.executionMode {
+	case notificationStartupExecution:
+		i.state = RUN
+	default:
+		i.state = QUERY
 	}
-	return QUERY
 }
 
 func (i *IBazel) run(targets ...string) (*bytes.Buffer, error) {
-	if !i.runCommandStarted {
-		// Direct callers may not have prepared the command through Run.
-		if i.cmd == nil {
-			i.cmd = i.setupRun(targets[0])
-		}
-		outputBuffer, err := i.cmd.Start()
-		i.runCommandStarted = err == nil
-		if err != nil {
-			log.Errorf("Run start failed %v", err)
-		}
-		return outputBuffer, err
+	if i.cmd == nil {
+		i.cmd = i.setupRun(targets[0])
 	}
 
-	log.Logf("Notifying of changes")
-	outputBuffer := i.cmd.NotifyOfChanges(i.pendingChanges)
-	return outputBuffer, nil
+	switch i.executionMode {
+	case defaultStartupExecution, notificationStartupExecution:
+		outputBuffer, err := i.cmd.Start()
+		if err != nil {
+			log.Errorf("Run start failed %v", err)
+		} else if i.executionMode == defaultStartupExecution {
+			i.executionMode = defaultExecution
+		}
+		return outputBuffer, err
+	default:
+		log.Logf("Notifying of changes")
+		outputBuffer := i.cmd.NotifyOfChanges(i.pendingChanges)
+		return outputBuffer, nil
+	}
 }
 
 func (i *IBazel) queryRule(rule string) (*blaze_query.Rule, error) {
